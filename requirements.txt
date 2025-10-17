@@ -1,0 +1,21 @@
+# Core Dependencies for Starshot Analyzer Domain Layer
+
+# Image processing and computer vision
+numpy>=1.19.0
+opencv-python>=4.5.0
+Pillow>=8.0.0
+
+# Machine learning (for RANSAC regression)
+scikit-learn>=0.24.0
+
+# Optional: Medical physics analysis
+pylinac>=2.8.0
+
+# Testing and code quality
+pytest>=6.0.0
+pytest-cov>=2.12.0
+
+# Development tools (optional)
+black>=21.0        # Code formatting
+flake8>=3.9.0      # Linting
+mypy>=0.910        # Static type checking

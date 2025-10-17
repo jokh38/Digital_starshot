@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//mnt/c/Users/com/OneDrive/**)",
+      "Bash(cd:*)",
+      "Bash(python3 -m pip install:*)",
+      "Bash(python3 -m pytest:*)",
+      "Bash(find:*)",
+      "Bash(python3 -m pylint:*)",
+      "Bash(python3:*)",
+      "Bash(awk:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
