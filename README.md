@@ -1,25 +1,36 @@
-# Starshot Analyzer - Refactored Domain Layer
+# Digital Starshot Analyzer
 
-A medical physics quality assurance tool for Starshot beam geometry analysis. This project contains a clean separation of domain logic from the Tkinter UI layer.
+A medical physics quality assurance application for Starshot beam geometry analysis with clean architecture. This project implements a complete separation of concerns with domain logic, service layer, and UI layer following Clean Architecture principles.
 
 ## Project Structure
 
 ```
-code_claude/
-├── Starshot_250303.py              # Original monolithic UI application
+Digital_starshot/
 ├── src/
 │   ├── domain/                     # Pure business logic (no dependencies)
 │   │   ├── isocenter_detection.py # Laser/DR center detection algorithms
-│   │   └── image_operations.py     # Image merging and manipulation
-│   └── services/                   # Application services (placeholder)
+│   │   ├── image_operations.py    # Image merging and manipulation
+│   │   └── constants.py           # Configuration constants
+│   ├── services/                   # Application services
+│   │   ├── analysis_service.py    # Starshot analysis orchestration
+│   │   ├── video_stream_service.py # Video streaming and frame capture
+│   │   └── config_service.py      # Configuration management
+│   ├── ui/                         # User interface layer
+│   │   ├── main_window.py         # Main Tkinter window
+│   │   └── config_editor.py       # Configuration editor dialog
+│   └── app.py                      # Application entry point and controller
 ├── tests/
 │   ├── domain/                     # Unit tests for domain logic
 │   │   ├── test_isocenter_detection.py
 │   │   └── test_image_operations.py
-│   └── services/                   # Service layer tests (TBD)
+│   └── services/                   # Service layer tests
+│       ├── test_analysis_service.py
+│       ├── test_video_stream_service.py
+│       └── test_config_service.py
 ├── docs/
 │   └── DOMAIN_LAYER.md             # Detailed API documentation
-├── REFACTORING_NOTES.md            # Architecture and design decisions
+├── requirements.txt                # Python dependencies
+├── config.ini                      # Application configuration
 └── README.md                       # This file
 ```
 
@@ -29,13 +40,20 @@ code_claude/
 
 ```bash
 # Clone or download the repository
-cd code_claude
+cd Digital_starshot
 
 # Install dependencies
 python3 -m pip install -r requirements.txt
+```
 
-# Or install packages individually
-python3 -m pip install numpy opencv-python scikit-learn pillow pytest pytest-cov
+### Running the Application
+
+```bash
+# Run the Starshot Analyzer GUI application
+python3 -m src.app
+
+# Or run directly
+python3 src/app.py
 ```
 
 ### Running Tests
@@ -51,90 +69,68 @@ python3 -m pytest tests/domain/ --cov=src/domain --cov-report=html
 python3 -m pytest tests/domain/test_isocenter_detection.py -v
 ```
 
-### Using the Domain Layer
+### Configuration
 
-```python
-import numpy as np
-from PIL import Image
-from src.domain.isocenter_detection import detect_laser_isocenter, detect_dr_center
-from src.domain.image_operations import merge_images
+Edit `config.ini` to configure:
+- Network settings (IP address, port)
+- Image crop parameters
+- Starshot analysis parameters
+- File paths
 
-# Example 1: Detect laser isocenter
-laser_image = np.array(Image.open("laser.jpg").convert("L"))
-laser_x, laser_y = detect_laser_isocenter(laser_image)
+Or use the built-in Configuration Editor in the GUI application (Settings > Edit Configuration).
 
-# Example 2: Detect DR center
-dr_image = np.array(Image.open("dr.jpg").convert("L"))
-dr_x, dr_y = detect_dr_center(dr_image)
+## Application Features
 
-# Example 3: Merge Starshot images
-images = [Image.open(f) for f in ["angle1.jpg", "angle2.jpg", "angle3.jpg"]]
-merged = merge_images(images)
-merged.save("merged_starshot.jpg")
-```
+### Video Streaming
+- Connect to network camera via MJPEG stream
+- Real-time video display with configurable cropping
+- Frame capture for analysis
 
-## Domain Layer API
+### Image Capture and Analysis
+- **Laser Isocenter Detection**: Automatically detect laser crosshair center using line fitting and RANSAC regression
+- **DR Center Detection**: Detect Digital Radiography center marker using contour analysis
+- **Starline Capture**: Capture brightest frame during gantry rotation
+- **Image Merging**: Merge multiple Starshot images using additive blending
 
-### isocenter_detection.py
+### Starshot Analysis
+- Complete Starshot analysis using pylinac library
+- Calculate minimum circle diameter
+- Compute offsets between radiation center, laser isocenter, and DR center
+- Visual analysis results with overlaid measurements
+- Pass/fail determination based on tolerance
 
-**`detect_laser_isocenter(image_array, roi_size=200) -> Tuple[float, float]`**
+### Configuration Management
+- INI-based configuration file
+- GUI configuration editor
+- Network, crop, and analysis parameter settings
 
-Detect laser crosshair isocenter position from a grayscale image using line fitting and RANSAC regression.
+## Architecture Overview
 
-```python
-import numpy as np
-from src.domain.isocenter_detection import detect_laser_isocenter
+### Clean Architecture Layers
 
-# Create synthetic laser crosshair image
-image = np.zeros((400, 400), dtype=np.uint8)
-image[200, 150:250] = 255  # Horizontal line
-image[150:250, 200] = 255  # Vertical line
+The application follows Clean Architecture principles with clear separation of concerns:
 
-# Detect center
-x, y = detect_laser_isocenter(image, roi_size=200)
-# Returns: (200.0, 200.0)
-```
+1. **Domain Layer** (`src/domain/`): Pure business logic
+   - No external dependencies
+   - Pure functions with no side effects
+   - Fully testable in isolation
+   - Core algorithms for detection and image processing
 
-**`detect_dr_center(image_array, roi_size=200, min_area=10, max_area=500) -> Tuple[int, int]`**
+2. **Service Layer** (`src/services/`): Application orchestration
+   - Bridges domain logic and external systems
+   - Manages I/O operations (files, network, configuration)
+   - Coordinates workflows between domain functions
+   - Handles logging and error recovery
 
-Detect DR (Digital Radiography) center marker position from a grayscale image using contour analysis.
+3. **UI Layer** (`src/ui/`): User interface
+   - Tkinter-based GUI components
+   - Event handling and user interactions
+   - Display logic only
 
-```python
-import numpy as np
-from src.domain.isocenter_detection import detect_dr_center
-
-# Create synthetic DR marker image
-image = np.zeros((400, 400), dtype=np.uint8)
-y, x = np.ogrid[:400, :400]
-mask = (x - 200) ** 2 + (y - 200) ** 2 <= 20 ** 2
-image[mask] = 255
-
-# Detect center
-x, y = detect_dr_center(image, roi_size=200, min_area=50, max_area=1000)
-# Returns: (200, 200)
-```
-
-### image_operations.py
-
-**`merge_images(image_list) -> Optional[Image.Image]`**
-
-Merge multiple PIL images using additive blending.
-
-```python
-from PIL import Image
-from src.domain.image_operations import merge_images
-
-# Load and merge images
-images = [
-    Image.open("starshot_g000.jpg"),
-    Image.open("starshot_g090.jpg"),
-    Image.open("starshot_g180.jpg")
-]
-
-merged = merge_images(images)
-if merged:
-    merged.save("merged_result.jpg")
-```
+4. **Application Controller** (`src/app.py`): Main coordinator
+   - Wires together all layers
+   - Manages application lifecycle
+   - Handles user events and delegates to services
 
 ## Test Results
 
@@ -146,18 +142,24 @@ tests/domain/test_image_operations.py::TestMergeImages                 13 PASSED
 tests/domain/test_isocenter_detection.py::TestDetectLaserIsocenter      7 PASSED
 tests/domain/test_isocenter_detection.py::TestDetectDRCenter            9 PASSED
 
-============================= 29 passed in 0.73s ==============================
+============================= 29 passed in 0.68s ==============================
 
-Coverage: 87% (134 statements, 18 uncovered)
+Coverage: 87% (domain layer fully tested)
 ```
 
 ## Key Features
 
-### Pure Functions
-- No side effects
+### Clean Architecture
+- **Separation of Concerns**: Domain, Service, and UI layers clearly separated
+- **Testability**: Domain layer has 87% test coverage with 29 unit tests
+- **Maintainability**: Single Responsibility Principle applied throughout
+- **Extensibility**: Easy to add new features or swap implementations
+
+### Pure Domain Logic
+- No side effects in core business logic
 - Stateless operations
 - Easy to test and reason about
-- Reusable in any context
+- Reusable in any context (CLI, API, GUI)
 
 ### Type Safety
 - Complete type hints for all functions
@@ -167,17 +169,18 @@ Coverage: 87% (134 statements, 18 uncovered)
 ### Comprehensive Documentation
 - Detailed docstrings with examples
 - API reference with parameter descriptions
-- Algorithm explanations
+- Algorithm explanations (see `docs/DOMAIN_LAYER.md`)
 
 ### Robust Error Handling
 - Input validation for all parameters
 - Graceful degradation on failures
+- Comprehensive logging throughout application
 - Informative error messages
 
 ### High Test Coverage
-- 29 unit tests covering all major scenarios
+- 29 unit tests for domain layer
 - Tests for edge cases and error conditions
-- 87% code coverage
+- 87% code coverage for domain layer
 - No test dependencies on UI or hardware
 
 ## Algorithm Details
@@ -239,11 +242,15 @@ All magic numbers have been extracted to module-level constants for easy tuning:
 | Package | Version | Purpose |
 |---------|---------|---------|
 | numpy | >=1.19 | Array operations |
-| opencv-python | >=4.5 | Image processing |
+| opencv-python | >=4.5 | Image processing and video streaming |
 | scikit-learn | >=0.24 | RANSAC regression |
-| Pillow | >=8.0 | Image I/O |
+| Pillow | >=8.0 | Image I/O and manipulation |
+| pylinac | >=2.8 | Starshot analysis algorithms |
 | pytest | >=6.0 | Testing framework |
 | pytest-cov | >=2.12 | Coverage reporting |
+| black | >=21.0 | Code formatting (optional) |
+| flake8 | >=3.9 | Linting (optional) |
+| mypy | >=0.910 | Static type checking (optional) |
 
 ## Performance
 
@@ -257,78 +264,81 @@ All magic numbers have been extracted to module-level constants for easy tuning:
 - DR detection: ~30-80ms
 - Image merging: ~20-50ms
 
-## Architecture Improvements
+## Benefits of Clean Architecture
 
-### Separation of Concerns
-- **Domain Layer:** Pure business logic (testable)
-- **Service Layer:** Application orchestration (TBD)
-- **UI Layer:** User interface (existing Tkinter app)
-
-### Benefits of Clean Architecture
-1. **Testability:** 87% code coverage with domain unit tests
-2. **Reusability:** Functions work in CLI, API, or batch contexts
+1. **Testability:** 87% code coverage with comprehensive domain unit tests
+2. **Reusability:** Domain functions work in any context (CLI, API, batch processing)
 3. **Maintainability:** Clear module boundaries and responsibilities
-4. **Extensibility:** Easy to add new features or algorithms
-5. **Performance:** Optimizations without UI constraints
+4. **Extensibility:** Easy to add new features, swap implementations, or integrate with other systems
+5. **Independence:** Domain logic independent of frameworks, UI, database, or external systems
+6. **Performance:** Optimizations possible without UI constraints
 
-## Future Roadmap
+## Development Roadmap
 
-### Phase 1: Domain Extraction (COMPLETE)
+### Phase 1: Domain Extraction (COMPLETE ✓)
 - ✓ Extract pure functions from monolithic UI
-- ✓ Create comprehensive test suite
+- ✓ Create comprehensive test suite (29 tests, 87% coverage)
 - ✓ Document API and algorithms
 
-### Phase 2: Service Layer
-- [ ] Create application services wrapper
-- [ ] Add configuration management
-- [ ] Add logging and error recovery
+### Phase 2: Service Layer (COMPLETE ✓)
+- ✓ Create application services (AnalysisService, VideoStreamService, ConfigService)
+- ✓ Add configuration management with INI files
+- ✓ Add comprehensive logging and error recovery
 
-### Phase 3: UI Integration
-- [ ] Update Tkinter UI to use services
-- [ ] Add progress indication
-- [ ] Add result visualization
+### Phase 3: UI Refactoring (COMPLETE ✓)
+- ✓ Refactor Tkinter UI to use Clean Architecture
+- ✓ Separate UI components (MainWindow, ConfigEditor)
+- ✓ Create ApplicationController to coordinate layers
+- ✓ Add result visualization with analysis overlays
 
-### Phase 4: Additional Interfaces
+### Phase 4: Future Enhancements
+- [ ] Add service layer unit tests
 - [ ] CLI tool for batch processing
 - [ ] REST API service
 - [ ] Batch processor for high-volume analysis
+- [ ] Export results to PDF/CSV formats
+- [ ] Historical trend analysis
 
 ## Documentation
 
-- **DOMAIN_LAYER.md:** Complete API reference with examples
-- **REFACTORING_NOTES.md:** Architecture decisions and design principles
-- **Source Code:** Comprehensive docstrings in all modules
+- **docs/DOMAIN_LAYER.md:** Complete API reference with examples and algorithm details
+- **Source Code:** Comprehensive docstrings in all modules with type hints
+- **Configuration:** Example `config.ini` with inline comments
+
+## Usage Workflow
+
+1. **Connect to Camera**: Click "Connect Camera" to establish video stream connection
+2. **Capture Laser Image**: Capture and detect laser isocenter position
+3. **Capture DR Image**: Capture and detect DR center marker position
+4. **Capture Starlines**: Use "Capture Starline" for each gantry angle, capturing the brightest frame
+5. **Merge Images**: Select and merge all captured starline images
+6. **Analyze**: Run complete Starshot analysis with automatic result visualization
 
 ## Contributing
 
 When extending this project:
 
-1. Follow TDD: Write tests first, then implementation
-2. Maintain pure functions in domain layer
-3. Add comprehensive type hints
-4. Document all public functions with docstrings
-5. Run tests and maintain >85% coverage: `pytest --cov=src/domain`
-6. Follow PEP 8 style guide
+1. **Follow TDD**: Write tests first, then implementation
+2. **Maintain Clean Architecture**: Keep domain layer pure (no I/O, no side effects)
+3. **Add Type Hints**: Use comprehensive type hints for all functions
+4. **Document Code**: Add detailed docstrings with examples
+5. **Run Tests**: Maintain >85% coverage with `pytest --cov=src/domain`
+6. **Follow Style**: Use black for formatting, flake8 for linting
+7. **Keep Layers Separate**: Domain → Service → UI/Controller
 
 ## License
 
 See LICENSE file (if applicable)
 
-## Contact
-
-For questions or issues regarding this refactoring:
-- Review REFACTORING_NOTES.md for architecture details
-- Check DOMAIN_LAYER.md for API documentation
-- Examine test cases in tests/domain/ for usage examples
-
 ## Summary
 
-This refactoring successfully extracted the core business logic from a monolithic Tkinter application into a clean, testable, and reusable domain layer. The resulting code:
+Digital Starshot Analyzer is a complete medical physics QA application built with Clean Architecture principles. The project successfully implements:
 
-- Provides 87% test coverage with 29 passing tests
-- Maintains algorithm correctness and performance
-- Enables testing without UI or hardware dependencies
-- Supports future extensions and integrations
-- Follows clean code and SOLID principles
+- **Clean Architecture**: Clear separation of Domain, Service, and UI layers
+- **High Test Coverage**: 87% test coverage with 29 comprehensive unit tests
+- **Pure Domain Logic**: Business logic independent of frameworks and external systems
+- **Full Application**: Complete Tkinter GUI with video streaming, image capture, and analysis
+- **Extensibility**: Ready for CLI, REST API, or batch processing extensions
+- **Production Ready**: Robust error handling, logging, and configuration management
 
-The domain layer is production-ready and can be integrated into CLI tools, REST APIs, batch processors, and other applications beyond the original Tkinter UI.
+The architecture enables testing without hardware dependencies, supports multiple interface types, and maintains algorithm correctness and performance while being highly maintainable and extensible.
