@@ -10,6 +10,8 @@ class MainWindow(tk.Tk):
     def __init__(self):
         super().__init__()
         self.controller = None
+        self._ui_update_job = None
+        self._is_shutting_down = False
         self.title("Starshot Analyzer")
         self.geometry("1000x700")
         self.minsize(1000, 700)
@@ -40,6 +42,9 @@ class MainWindow(tk.Tk):
 
     def update_ui_state(self):
         """Poll the controller state and enable/disable UI elements accordingly."""
+        if self._is_shutting_down:
+            return
+
         if self.controller:
             camera_online = self.controller.video_stream is not None and self.controller.video_stream.is_alive()
             
@@ -57,7 +62,18 @@ class MainWindow(tk.Tk):
                            self.controller.dr_coords is not None)
             self.btn_analyze.config(state=tk.NORMAL if can_analyze else tk.DISABLED)
 
-        self.after(500, self.update_ui_state)
+        self._ui_update_job = self.after(500, self.update_ui_state)
+
+    def begin_shutdown(self):
+        """Stop recurring UI callbacks before the window is destroyed."""
+        self._is_shutting_down = True
+        if self._ui_update_job is not None:
+            try:
+                self.after_cancel(self._ui_update_job)
+            except tk.TclError:
+                pass
+            finally:
+                self._ui_update_job = None
 
     def create_empty_image(self):
         """Create an empty image placeholder for the merged image view."""

@@ -84,6 +84,9 @@ class VideoStreamService(threading.Thread):
             while not self._stop_event.is_set():
                 ret, frame = cap.read()
 
+                if self._stop_event.is_set():
+                    break
+
                 if ret and frame is not None:
                     # Mark camera as online
                     with self._state_lock:
@@ -94,7 +97,7 @@ class VideoStreamService(threading.Thread):
                         self._current_frame = frame.copy()
 
                     # Invoke callback if provided
-                    if self.callback:
+                    if self.callback and not self._stop_event.is_set():
                         try:
                             self.callback(frame)
                         except Exception as e:
@@ -115,6 +118,9 @@ class VideoStreamService(threading.Thread):
             logging.error(f"VideoStreamService error: {e}")
 
         finally:
+            with self._state_lock:
+                self._camera_is_online = False
+
             # Ensure video capture is released
             if cap is not None:
                 try:
@@ -246,6 +252,12 @@ class VideoStreamService(threading.Thread):
         """
         if not self._stop_event.is_set():
             self._stop_event.set()
+
+        with self._state_lock:
+            self._camera_is_online = False
+            self._calculation_enabled = False
+
+        self.callback = None
 
         with self._capture_lock:
             if self._capture is not None:

@@ -26,6 +26,7 @@ class ApplicationController:
         self.laser_coords: Optional[tuple] = None
         self.dr_coords: Optional[tuple] = None
         self.merged_image: Optional[Image.Image] = None
+        self._is_closing = False
 
     def run(self):
         """Run the application's main loop."""
@@ -38,10 +39,21 @@ class ApplicationController:
 
     def on_closing(self):
         """Handle the window closing event."""
+        if self._is_closing:
+            return
+
         if messagebox.askokcancel("Exit", "Are you sure you want to exit?"):
+            self._is_closing = True
+            self.root.begin_shutdown()
+
             if self.video_stream:
                 self.video_stream.stop()
-            self.root.destroy()
+                self.video_stream = None
+
+            try:
+                self.root.quit()
+            finally:
+                self.root.destroy()
 
     def connect_camera(self):
         """Connect to the video stream."""
@@ -60,12 +72,21 @@ class ApplicationController:
 
     def on_frame_received(self, frame: np.ndarray):
         """Callback for the video stream service."""
+        if self._is_closing:
+            return
+
         cfg = self.config.crop
         cropped_frame = frame[cfg.crop_y : cfg.crop_y + cfg.crop_h, cfg.crop_x : cfg.crop_x + cfg.crop_w]
 
         rgb_img = cv2.cvtColor(cropped_frame, cv2.COLOR_BGR2RGB)
         pil_img = Image.fromarray(rgb_img)
-        self.root.update_image_label(self.root.lbl_stream, self.root.frame_streaming, pil_img)
+
+        def update_stream_image():
+            if self._is_closing or not self.root.winfo_exists():
+                return
+            self.root.update_image_label(self.root.lbl_stream, self.root.frame_streaming, pil_img)
+
+        self.root.after(0, update_stream_image)
 
     def capture_image(self, image_type: str) -> Optional[str]:
         """Capture the current frame and save it to a file."""
