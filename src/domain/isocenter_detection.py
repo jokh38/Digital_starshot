@@ -12,56 +12,73 @@ import cv2
 from typing import Tuple
 
 from .constants import (
-    LASER_ROI_SIZE,
-    LASER_GAUSSIAN_KERNEL,
-    LASER_GAUSSIAN_SIGMA,
-    LASER_LINE_ITERATIONS,
-    LASER_LINE_THRESHOLD,
-    LASER_RANSAC_THRESHOLD,
-    LASER_SLOPE_TOLERANCE,
     DR_ROI_SIZE,
-    DR_GAUSSIAN_KERNEL,
-    DR_GAUSSIAN_SIGMA,
     DR_MIN_CONTOUR_AREA,
     DR_MAX_CONTOUR_AREA,
-    DR_MOMENT_THRESHOLD,
+    LASER_ROI_SIZE,
 )
 
 
-def _fit_line_robustly(
-    x_values: np.ndarray,
-    y_values: np.ndarray,
-    residual_threshold: float,
+MIN_PROFILE_SIGNAL = 1e-6
+LASER_PEAK_RADIUS = 15
+LASER_MIN_PEAK_PROMINENCE = 0.15
+DR_BACKGROUND_SIGMA = 9.0
+DR_RESPONSE_SIGMA = 1.5
+DR_MIN_CIRCULARITY = 0.45
+DR_MIN_ASPECT_RATIO = 0.55
+DR_MAX_CENTER_DISTANCE = 160.0
+DR_MIN_DARK_RESPONSE = 5.0
+
+
+def _extract_center_roi(image_array: np.ndarray, roi_size: int) -> Tuple[np.ndarray, int, int]:
+    """Extract a centered ROI and its origin in full-image coordinates."""
+    h, w = image_array.shape[:2]
+    center_y = h // 2
+    center_x = w // 2
+    roi_start_y = max(0, center_y - roi_size)
+    roi_end_y = min(h, center_y + roi_size)
+    roi_start_x = max(0, center_x - roi_size)
+    roi_end_x = min(w, center_x + roi_size)
+    return image_array[roi_start_y:roi_end_y, roi_start_x:roi_end_x], roi_start_x, roi_start_y
+
+
+def _refine_profile_peak(
+    profile: np.ndarray,
+    peak_index: int,
+    radius: int = LASER_PEAK_RADIUS,
 ) -> Tuple[float, float]:
-    """Fit y = mx + b with iterative outlier trimming."""
-    if len(x_values) < 2:
-        return 0.0, float(np.mean(y_values))
+    """Return a subpixel centroid and normalized prominence around a 1D peak."""
+    lo = max(0, peak_index - radius)
+    hi = min(len(profile), peak_index + radius + 1)
+    window = profile[lo:hi]
+    weight_sum = float(window.sum())
+    if weight_sum <= MIN_PROFILE_SIGNAL:
+        raise ValueError("Insufficient signal to refine peak")
 
-    inlier_mask = np.ones(len(x_values), dtype=bool)
+    coords = np.arange(lo, hi, dtype=np.float64)
+    centroid = float(np.dot(coords, window) / weight_sum)
+    baseline = float(np.median(profile))
+    prominence = float(profile[peak_index] - baseline)
+    normalized_prominence = prominence / max(float(profile[peak_index]), 1.0)
+    return centroid, normalized_prominence
 
-    for _ in range(4):
-        active_x = x_values[inlier_mask]
-        active_y = y_values[inlier_mask]
-        if len(active_x) < 2:
-            break
 
-        slope, intercept = np.polyfit(active_x, active_y, 1)
-        residuals = np.abs(y_values - (slope * x_values + intercept))
-        updated_mask = residuals <= residual_threshold
-
-        if updated_mask.sum() < 2:
-            break
-        if np.array_equal(updated_mask, inlier_mask):
-            return float(slope), float(intercept)
-        inlier_mask = updated_mask
-
-    active_x = x_values[inlier_mask]
-    active_y = y_values[inlier_mask]
-    if len(active_x) < 2:
-        return 0.0, float(np.mean(y_values))
-
-    slope, intercept = np.polyfit(active_x, active_y, 1)
-    return float(slope), float(intercept)
+def _component_score(
+    *,
+    area: int,
+    aspect_ratio: float,
+    circularity: float,
+    darkness: float,
+    distance: float,
+) -> float:
+    """Score a DR-ball candidate with shape, contrast, and center proximity."""
+    return (
+        area
+        * max(aspect_ratio, 1e-6)
+        * max(circularity, 1e-6)
+        * max(darkness, 1e-6)
+        / (1.0 + distance / 50.0)
+    )
 
 
 def detect_laser_isocenter(
@@ -69,15 +86,16 @@ def detect_laser_isocenter(
     roi_size: int = LASER_ROI_SIZE
 ) -> Tuple[float, float]:
     """
-    Detect laser isocenter position from a grayscale image.
+    Detect laser isocenter position from a laser cross image.
 
-    This function analyzes a laser crosshair pattern to find the precise center
-    position using line detection and RANSAC regression. The function expects
-    a grayscale image with a laser crosshair pattern (vertical and horizontal lines).
+    This function analyzes the bright green vertical and horizontal laser lines
+    in a centered ROI. It isolates green-dominant pixels, sums the signal along
+    rows and columns, and refines the brightest row/column peaks to subpixel
+    precision. The crossing of those peaks is the estimated laser isocenter.
 
     Args:
-        image_array: Grayscale numpy array (height, width) representing the image.
-                    Values should be in range [0, 255].
+        image_array: Numpy array representing the image. Accepted shapes are
+                    grayscale (height, width) or RGB/BGR-like (height, width, 3).
         roi_size: Region of interest size in pixels around image center (default: 200).
 
     Returns:
@@ -85,94 +103,49 @@ def detect_laser_isocenter(
                             Coordinates are relative to the full image, not ROI.
 
     Raises:
-        ValueError: If image_array is not 2D or is empty.
+        ValueError: If image_array shape is unsupported, empty, or the laser
+                    signal is too weak to locate confidently.
         TypeError: If image_array is not a numpy array.
-
-    Example:
-        >>> import numpy as np
-        >>> image = np.zeros((400, 400), dtype=np.uint8)
-        >>> image[200, 150:250] = 255  # Horizontal line
-        >>> image[150:250, 200] = 255  # Vertical line
-        >>> x, y = detect_laser_isocenter(image)
     """
     # Input validation
     if not isinstance(image_array, np.ndarray):
         raise TypeError("image_array must be a numpy array")
 
-    if image_array.ndim != 2:
-        raise ValueError("image_array must be 2-dimensional")
-
     if image_array.size == 0:
         raise ValueError("image_array cannot be empty")
 
-    h, w = image_array.shape
-
-    # Extract ROI centered on image center
-    roi_start_y = max(0, int(h / 2) - roi_size)
-    roi_end_y = min(h, int(h / 2) + roi_size)
-    roi_start_x = max(0, int(w / 2) - roi_size)
-    roi_end_x = min(w, int(w / 2) + roi_size)
-
-    crop_roi = image_array[roi_start_y:roi_end_y, roi_start_x:roi_end_x]
-
-    # Apply Gaussian blur to smooth the image
-    blurred = cv2.GaussianBlur(crop_roi, LASER_GAUSSIAN_KERNEL, LASER_GAUSSIAN_SIGMA)
-
-    # Apply threshold to create binary image
-    _, tmp_thresh = cv2.threshold(
-        blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-    )
-    thresh = ~tmp_thresh  # Invert threshold
-
-    size_v, _ = crop_roi.shape
-
-    # Analyze multiple cross-sections
-    pos_vert = []
-    pos_horz = []
-    xy_pos = np.zeros(LASER_LINE_ITERATIONS - 1)
-
-    for i in range(LASER_LINE_ITERATIONS - 1):
-        idx = int((size_v / LASER_LINE_ITERATIONS) * (i + 1))
-        line_vert = thresh[:, idx]
-        line_horz = thresh[idx, :]
-
-        xy_pos[i] = idx
-
-        # Find center of lines
-        vert_pixels = np.where(line_vert < LASER_LINE_THRESHOLD)[0]
-        horz_pixels = np.where(line_horz < LASER_LINE_THRESHOLD)[0]
-
-        pos_vert.append(np.mean(vert_pixels) if len(vert_pixels) > 0 else idx)
-        pos_horz.append(np.mean(horz_pixels) if len(horz_pixels) > 0 else idx)
-
-    pos_vert = np.array(pos_vert)
-    pos_horz = np.array(pos_horz)
-
-    hor_x = xy_pos
-    hor_y = pos_horz
-    ver_x = xy_pos
-    ver_y = pos_vert
-
-    hor_slope, hor_intercept = _fit_line_robustly(
-        hor_x, hor_y, LASER_RANSAC_THRESHOLD
-    )
-    ver_slope, ver_intercept = _fit_line_robustly(
-        ver_x, ver_y, LASER_RANSAC_THRESHOLD
-    )
-
-    # Horizontal slices estimate x as a function of y; vertical slices estimate
-    # y as a function of x. Solve the two fitted lines for their intersection.
-    determinant = 1.0 - (hor_slope * ver_slope)
-    if abs(determinant) > LASER_SLOPE_TOLERANCE:
-        laser_x = roi_start_x + (
-            (hor_slope * ver_intercept + hor_intercept) / determinant
+    if image_array.ndim == 2:
+        green_signal = image_array.astype(np.float32)
+    elif image_array.ndim == 3 and image_array.shape[2] >= 3:
+        image_float = image_array.astype(np.float32)
+        green_signal = np.clip(
+            image_float[:, :, 1] - np.maximum(image_float[:, :, 0], image_float[:, :, 2]),
+            0,
+            None,
         )
-        laser_y = roi_start_y + (ver_slope * (laser_x - roi_start_x) + ver_intercept)
     else:
-        laser_x = roi_start_x + float(np.mean(pos_horz))
-        laser_y = roi_start_y + float(np.mean(pos_vert))
+        raise ValueError("image_array must be 2D grayscale or 3-channel color")
 
-    return float(laser_x), float(laser_y)
+    crop_roi, roi_start_x, roi_start_y = _extract_center_roi(green_signal, roi_size)
+    if crop_roi.size == 0:
+        raise ValueError("ROI is empty")
+
+    crop_roi = cv2.GaussianBlur(crop_roi, (0, 0), 2.0)
+    column_profile = crop_roi.sum(axis=0)
+    row_profile = crop_roi.sum(axis=1)
+
+    if float(column_profile.max()) <= MIN_PROFILE_SIGNAL or float(row_profile.max()) <= MIN_PROFILE_SIGNAL:
+        raise ValueError("Laser signal too weak to detect")
+
+    peak_x = int(np.argmax(column_profile))
+    peak_y = int(np.argmax(row_profile))
+    refined_x, x_prominence = _refine_profile_peak(column_profile, peak_x)
+    refined_y, y_prominence = _refine_profile_peak(row_profile, peak_y)
+
+    if min(x_prominence, y_prominence) < LASER_MIN_PEAK_PROMINENCE:
+        raise ValueError("Laser signal is ambiguous")
+
+    return float(roi_start_x + refined_x), float(roi_start_y + refined_y)
 
 
 def detect_dr_center(
@@ -182,16 +155,16 @@ def detect_dr_center(
     max_area: int = DR_MAX_CONTOUR_AREA
 ) -> Tuple[int, int]:
     """
-    Detect DR (Digital Radiography) center from an image.
+    Detect DR (Digital Radiography) ball center from an image.
 
-    This function identifies circular markers in a digital radiography image
-    by finding contours within a specified area range and calculating their
-    center of mass. The function uses Gaussian blur and Otsu thresholding
-    to enhance the marker detection.
+    This function identifies the small dark lead ball in a DR image with bright
+    and potentially reflective background. It estimates a smooth local background,
+    subtracts it to emphasize dark localized objects, and scores connected
+    components by size, circularity, compactness, darkness, and distance from
+    the image center.
 
     Args:
         image_array: Grayscale numpy array (height, width) representing the image.
-                    Values should be in range [0, 255].
         roi_size: Region of interest size in pixels around image center (default: 200).
         min_area: Minimum contour area in pixels² to consider (default: 10).
         max_area: Maximum contour area in pixels² to consider (default: 500).
@@ -201,17 +174,9 @@ def detect_dr_center(
                         Coordinates are relative to the full image, not ROI.
 
     Raises:
-        ValueError: If image_array is not 2D, is empty, or max_area < min_area.
+        ValueError: If image_array is not 2D, is empty, max_area < min_area, or
+                    no plausible lead-ball candidate is detected.
         TypeError: If image_array is not a numpy array.
-
-    Example:
-        >>> import numpy as np
-        >>> image = np.zeros((400, 400), dtype=np.uint8)
-        >>> # Create circular marker at center
-        >>> y, x = np.ogrid[:400, :400]
-        >>> mask = (x - 200) ** 2 + (y - 200) ** 2 <= 20 ** 2
-        >>> image[mask] = 255
-        >>> cx, cy = detect_dr_center(image)
     """
     # Input validation
     if not isinstance(image_array, np.ndarray):
@@ -226,47 +191,73 @@ def detect_dr_center(
     if max_area < min_area:
         raise ValueError("max_area must be greater than or equal to min_area")
 
-    h, w = image_array.shape
+    crop_roi, roi_start_x, roi_start_y = _extract_center_roi(image_array, roi_size)
+    if crop_roi.size == 0:
+        raise ValueError("ROI is empty")
 
-    # Extract ROI centered on image center
-    roi_start_y = max(0, int(h / 2) - roi_size)
-    roi_end_y = min(h, int(h / 2) + roi_size)
-    roi_start_x = max(0, int(w / 2) - roi_size)
-    roi_end_x = min(w, int(w / 2) + roi_size)
+    blurred = cv2.GaussianBlur(crop_roi, (0, 0), DR_BACKGROUND_SIGMA)
+    dark_response = np.clip(blurred.astype(np.float32) - crop_roi.astype(np.float32), 0, None)
+    dark_response = cv2.GaussianBlur(dark_response, (0, 0), DR_RESPONSE_SIGMA)
 
-    crop_roi = image_array[roi_start_y:roi_end_y, roi_start_x:roi_end_x]
+    if float(dark_response.max()) < DR_MIN_DARK_RESPONSE:
+        raise ValueError("No dark lead-ball candidate detected")
 
-    # Apply Gaussian blur
-    blurred = cv2.GaussianBlur(crop_roi, DR_GAUSSIAN_KERNEL, DR_GAUSSIAN_SIGMA)
-
-    # Apply Otsu threshold
-    _, tmp_thresh = cv2.threshold(
-        blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+    scaled = np.uint8(np.clip(255 * dark_response / float(dark_response.max()), 0, 255))
+    _, thresholded = cv2.threshold(scaled, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    thresholded = cv2.morphologyEx(
+        thresholded,
+        cv2.MORPH_OPEN,
+        np.ones((3, 3), dtype=np.uint8),
     )
-    thresh = ~tmp_thresh  # Invert threshold
 
-    # Find contours
-    contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(thresholded, connectivity=8)
+    roi_center = np.array([crop_roi.shape[1] / 2.0, crop_roi.shape[0] / 2.0], dtype=np.float64)
 
-    # Filter contours by area
-    filtered_contours = [
-        cnt for cnt in contours
-        if min_area < cv2.contourArea(cnt) < max_area
-    ]
+    best_candidate: Tuple[float, float, float] | None = None
 
-    # Default: return ROI center if no contours found
-    dr_x = roi_start_x + int(w / 2) - roi_start_x
-    dr_y = roi_start_y + int(h / 2) - roi_start_y
+    for label_index in range(1, num_labels):
+        area = int(stats[label_index, cv2.CC_STAT_AREA])
+        if area < min_area or area > max_area:
+            continue
 
-    if filtered_contours:
-        # Find largest contour
-        largest_contour = max(filtered_contours, key=cv2.contourArea)
+        width = int(stats[label_index, cv2.CC_STAT_WIDTH])
+        height = int(stats[label_index, cv2.CC_STAT_HEIGHT])
+        aspect_ratio = min(width, height) / max(width, height)
+        if aspect_ratio < DR_MIN_ASPECT_RATIO:
+            continue
 
-        # Calculate moments (center of mass)
-        M = cv2.moments(largest_contour)
+        component_mask = np.uint8(labels == label_index) * 255
+        contours, _ = cv2.findContours(component_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
 
-        if M["m00"] > DR_MOMENT_THRESHOLD:
-            dr_x = roi_start_x + int(M["m10"] / M["m00"])
-            dr_y = roi_start_y + int(M["m01"] / M["m00"])
+        contour = max(contours, key=cv2.contourArea)
+        perimeter = cv2.arcLength(contour, closed=True)
+        if perimeter <= 0:
+            continue
 
-    return int(dr_x), int(dr_y)
+        circularity = float(4.0 * np.pi * area / (perimeter * perimeter))
+        if circularity < DR_MIN_CIRCULARITY:
+            continue
+
+        candidate_center = centroids[label_index]
+        distance = float(np.linalg.norm(candidate_center - roi_center))
+        if distance > DR_MAX_CENTER_DISTANCE:
+            continue
+
+        darkness = float(dark_response[labels == label_index].mean())
+        score = _component_score(
+            area=area,
+            aspect_ratio=aspect_ratio,
+            circularity=circularity,
+            darkness=darkness,
+            distance=distance,
+        )
+
+        if best_candidate is None or score > best_candidate[2]:
+            best_candidate = (float(candidate_center[0]), float(candidate_center[1]), score)
+
+    if best_candidate is None:
+        raise ValueError("No plausible lead-ball candidate detected")
+
+    return int(round(roi_start_x + best_candidate[0])), int(round(roi_start_y + best_candidate[1]))
