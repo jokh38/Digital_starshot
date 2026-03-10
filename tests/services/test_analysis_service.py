@@ -63,8 +63,8 @@ class TestAnalysisService(unittest.TestCase):
         self.assertEqual((x, y), (50, 50))
         mock_detect.assert_called_once()
 
-    @patch("src.services.analysis_service.Starshot")
-    def test_analyze_starshot_success(self, mock_starshot):
+    @patch("src.services.analysis_service._load_starshot_class")
+    def test_analyze_starshot_success(self, mock_load_starshot):
         """Test the full Starshot analysis workflow."""
         # Mocking pylinac's Starshot class and its methods
         mock_results_data = MagicMock()
@@ -75,7 +75,8 @@ class TestAnalysisService(unittest.TestCase):
 
         mock_star_instance = MagicMock()
         mock_star_instance.results_data.return_value = mock_results_data
-        mock_starshot.return_value = mock_star_instance
+        mock_starshot = MagicMock(return_value=mock_star_instance)
+        mock_load_starshot.return_value = mock_starshot
 
         merged_image = Image.new("RGB", (100, 100))
         laser_coords = (51.0, 51.0)
@@ -89,6 +90,16 @@ class TestAnalysisService(unittest.TestCase):
         # Clean up the temporary file created by the service
         if os.path.exists(results["analyzed_image_path"]):
             os.remove(results["analyzed_image_path"])
+
+    @patch("src.services.analysis_service._load_starshot_class")
+    def test_analyze_starshot_requires_pylinac(self, mock_load_starshot):
+        """Test that missing pylinac only fails at analysis time."""
+        mock_load_starshot.side_effect = RuntimeError(
+            "Final Starshot analysis requires the optional 'pylinac' dependency."
+        )
+
+        with self.assertRaises(RuntimeError):
+            self.service.analyze_starshot(Image.new("RGB", (100, 100)), (0.0, 0.0), (0, 0))
 
 if __name__ == "__main__":
     unittest.main()

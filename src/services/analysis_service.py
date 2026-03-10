@@ -13,13 +13,24 @@ import os
 from typing import List, Tuple
 from PIL import Image
 import numpy as np
-from pylinac import Starshot
 
 from src.domain.image_operations import merge_images
 from src.domain.isocenter_detection import (
     detect_laser_isocenter,
     detect_dr_center,
 )
+
+
+def _load_starshot_class():
+    """Import pylinac only when final analysis is requested."""
+    try:
+        from pylinac import Starshot
+    except ImportError as exc:
+        raise RuntimeError(
+            "Final Starshot analysis requires the optional 'pylinac' dependency. "
+            "Install it with 'python3 -m pip install pylinac' to use Analyze."
+        ) from exc
+    return Starshot
 
 
 class AnalysisService:
@@ -140,6 +151,7 @@ class AnalysisService:
             tmp_path = tmp_file.name
 
         try:
+            Starshot = _load_starshot_class()
             star = Starshot(tmp_path, dpi=dpi, sid=1000)
             star.analyze()
 

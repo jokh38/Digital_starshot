@@ -34,7 +34,7 @@ class VideoStreamService(threading.Thread):
             thread_join_timeout: Timeout in seconds for thread.join()
             callback: Optional callback function(frame) called for each frame
         """
-        super().__init__(daemon=False)
+        super().__init__(daemon=True)
 
         self.video_source = video_source
         self.thread_join_timeout = thread_join_timeout
@@ -47,6 +47,7 @@ class VideoStreamService(threading.Thread):
         self._state_lock = threading.Lock()
         self._frame_lock = threading.Lock()
         self._brightness_lock = threading.Lock()
+        self._capture_lock = threading.Lock()
 
         # Shared state - camera connection
         self._camera_is_online = False
@@ -61,6 +62,7 @@ class VideoStreamService(threading.Thread):
         # Shared state - maximum brightness and brightest frame
         self._max_brightness = 0
         self._brightest_frame = None
+        self._capture = None
 
     def run(self) -> None:
         """Main thread execution loop.
@@ -72,6 +74,8 @@ class VideoStreamService(threading.Thread):
         try:
             # Open video capture
             cap = cv2.VideoCapture(self.video_source)
+            with self._capture_lock:
+                self._capture = cap
             if not cap.isOpened():
                 logging.warning(f"Failed to open video source: {self.video_source}")
                 return
@@ -115,6 +119,9 @@ class VideoStreamService(threading.Thread):
             if cap is not None:
                 try:
                     cap.release()
+                    with self._capture_lock:
+                        if self._capture is cap:
+                            self._capture = None
                     logging.info("Video capture released successfully")
                 except Exception as e:
                     logging.error(f"Error releasing video capture: {e}")
@@ -239,6 +246,15 @@ class VideoStreamService(threading.Thread):
         """
         if not self._stop_event.is_set():
             self._stop_event.set()
+
+        with self._capture_lock:
+            if self._capture is not None:
+                try:
+                    self._capture.release()
+                except Exception as e:
+                    logging.error(f"Error releasing video capture during stop: {e}")
+                finally:
+                    self._capture = None
 
         # Wait for thread to finish
         if self.is_alive():

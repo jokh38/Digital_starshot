@@ -9,7 +9,6 @@ Constants are imported from the centralized constants module.
 
 import numpy as np
 import cv2
-from sklearn.linear_model import RANSACRegressor
 from typing import Tuple
 
 from .constants import (
@@ -27,6 +26,42 @@ from .constants import (
     DR_MAX_CONTOUR_AREA,
     DR_MOMENT_THRESHOLD,
 )
+
+
+def _fit_line_robustly(
+    x_values: np.ndarray,
+    y_values: np.ndarray,
+    residual_threshold: float,
+) -> Tuple[float, float]:
+    """Fit y = mx + b with iterative outlier trimming."""
+    if len(x_values) < 2:
+        return 0.0, float(np.mean(y_values))
+
+    inlier_mask = np.ones(len(x_values), dtype=bool)
+
+    for _ in range(4):
+        active_x = x_values[inlier_mask]
+        active_y = y_values[inlier_mask]
+        if len(active_x) < 2:
+            break
+
+        slope, intercept = np.polyfit(active_x, active_y, 1)
+        residuals = np.abs(y_values - (slope * x_values + intercept))
+        updated_mask = residuals <= residual_threshold
+
+        if updated_mask.sum() < 2:
+            break
+        if np.array_equal(updated_mask, inlier_mask):
+            return float(slope), float(intercept)
+        inlier_mask = updated_mask
+
+    active_x = x_values[inlier_mask]
+    active_y = y_values[inlier_mask]
+    if len(active_x) < 2:
+        return 0.0, float(np.mean(y_values))
+
+    slope, intercept = np.polyfit(active_x, active_y, 1)
+    return float(slope), float(intercept)
 
 
 def detect_laser_isocenter(
@@ -113,59 +148,29 @@ def detect_laser_isocenter(
     pos_vert = np.array(pos_vert)
     pos_horz = np.array(pos_horz)
 
-    # Fit lines using RANSAC regression
-    # Horizontal line fit
-    ransac_hor = RANSACRegressor(residual_threshold=LASER_RANSAC_THRESHOLD, random_state=42)
-    hor_x = xy_pos.reshape(-1, 1)
+    hor_x = xy_pos
     hor_y = pos_horz
-
-    try:
-        ransac_hor.fit(hor_x, hor_y)
-        hor_slope = ransac_hor.estimator_.coef_[0]
-        hor_intercept = ransac_hor.estimator_.intercept_
-    except (ValueError, RuntimeError, AttributeError):
-        # If fitting fails, use mean values
-        hor_slope = 0
-        hor_intercept = np.mean(pos_horz)
-
-    # Vertical line fit
-    ransac_ver = RANSACRegressor(residual_threshold=LASER_RANSAC_THRESHOLD, random_state=42)
-    ver_x = xy_pos.reshape(-1, 1)
+    ver_x = xy_pos
     ver_y = pos_vert
 
-    try:
-        ransac_ver.fit(ver_x, ver_y)
-        ver_slope = ransac_ver.estimator_.coef_[0]
-        ver_intercept = ransac_ver.estimator_.intercept_
-    except (ValueError, RuntimeError, AttributeError):
-        # If fitting fails, use mean values
-        ver_slope = 0
-        ver_intercept = np.mean(pos_vert)
+    hor_slope, hor_intercept = _fit_line_robustly(
+        hor_x, hor_y, LASER_RANSAC_THRESHOLD
+    )
+    ver_slope, ver_intercept = _fit_line_robustly(
+        ver_x, ver_y, LASER_RANSAC_THRESHOLD
+    )
 
-    # Calculate intersection point (isocenter)
-    if abs(ver_slope) > LASER_SLOPE_TOLERANCE:
-        # Lines are not parallel
-        ori_ver_slope = -1 / ver_slope
-        ori_ver_intercept = -hor_intercept / ver_slope
-        determinant = -hor_slope + ori_ver_slope
-
-        if abs(determinant) > 1e-10:  # Avoid division by zero
-            laser_x = (
-                roi_start_x +
-                (-ori_ver_intercept + hor_intercept) / determinant
-            )
-            laser_y = (
-                roi_start_y +
-                (hor_intercept * ori_ver_slope - ori_ver_intercept * hor_slope) / determinant
-            )
-        else:
-            # Fallback: use intercepts
-            laser_x = roi_start_x + hor_intercept
-            laser_y = roi_start_y + ver_intercept
+    # Horizontal slices estimate x as a function of y; vertical slices estimate
+    # y as a function of x. Solve the two fitted lines for their intersection.
+    determinant = 1.0 - (hor_slope * ver_slope)
+    if abs(determinant) > LASER_SLOPE_TOLERANCE:
+        laser_x = roi_start_x + (
+            (hor_slope * ver_intercept + hor_intercept) / determinant
+        )
+        laser_y = roi_start_y + (ver_slope * (laser_x - roi_start_x) + ver_intercept)
     else:
-        # Lines are nearly parallel or vertical
-        laser_x = roi_start_x + hor_intercept
-        laser_y = roi_start_y + ver_intercept
+        laser_x = roi_start_x + float(np.mean(pos_horz))
+        laser_y = roi_start_y + float(np.mean(pos_vert))
 
     return float(laser_x), float(laser_y)
 
