@@ -113,6 +113,32 @@ class ApplicationController:
             except Exception as e:
                 self.log(f"DR detection failed: {e}")
 
+    def load_laser_file(self):
+        """Load an existing Laser image file from disk for analysis."""
+        filepath = filedialog.askopenfilename(
+            title="Select Laser Image",
+            filetypes=[("JPEG files", "*.jpg"), ("PNG files", "*.png"), ("All files", "*.*")]
+        )
+        if filepath:
+            try:
+                self.laser_coords = self.analysis_service.detect_laser_isocenter(filepath)
+                self.log(f"Loaded Laser isocenter from file: {self.laser_coords[0]:.2f}, {self.laser_coords[1]:.2f}")
+            except Exception as e:
+                self.log(f"File Laser detection failed: {e}")
+
+    def load_dr_file(self):
+        """Load an existing DR image file from disk for analysis."""
+        filepath = filedialog.askopenfilename(
+            title="Select DR Image",
+            filetypes=[("JPEG files", "*.jpg"), ("PNG files", "*.png"), ("All files", "*.*")]
+        )
+        if filepath:
+            try:
+                self.dr_coords = self.analysis_service.detect_dr_center(filepath)
+                self.log(f"Loaded DR center from file: {self.dr_coords}")
+            except Exception as e:
+                self.log(f"File DR detection failed: {e}")
+
     def toggle_starline_capture(self):
         """Toggle the starline capture mode."""
         if not (self.video_stream and self.video_stream.is_camera_online()):
@@ -178,12 +204,11 @@ class ApplicationController:
                 self.merged_image, self.laser_coords, self.dr_coords
             )
 
-            self.root.tbl_result.delete(*self.root.tbl_result.get_children())
-            self.root.tbl_result.insert('', 'end', values=(
-                f"{results['circle_diameter_mm']:.2f}",
-                f"({results['laser_offset_mm'][0]:.2f}, {results['laser_offset_mm'][1]:.2f})",
-                f"({results['dr_offset_mm'][0]:.2f}, {results['dr_offset_mm'][1]:.2f})"
-            ))
+            self.root.update_results(
+                f"{results['circle_diameter_mm']:.2f} mm",
+                f"({results['laser_offset_mm'][0]:.2f}, {results['laser_offset_mm'][1]:.2f}) mm",
+                f"({results['dr_offset_mm'][0]:.2f}, {results['dr_offset_mm'][1]:.2f}) mm"
+            )
 
             self.log(f"Analysis complete. Passed: {results['passed']}")
             self.log(f"Min radius: {results['circle_diameter_mm']:.2f} mm")
