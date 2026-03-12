@@ -12,9 +12,8 @@ class MainWindow(tk.Tk):
         self.controller = None
         self._ui_update_job = None
         self._is_shutting_down = False
+        self._image_bindings = {}
         self.title("Starshot Analyzer")
-        self.geometry("1000x700")
-        self.minsize(1000, 700)
 
     def set_controller(self, controller):
         """Set the controller and initialize UI components that need it."""
@@ -22,6 +21,7 @@ class MainWindow(tk.Tk):
         self.apply_styles()
         self.init_ui()
         self.create_empty_image()
+        self._apply_initial_window_size()
         self.protocol("WM_DELETE_WINDOW", self.controller.on_closing)
         self.update_ui_state()
 
@@ -80,6 +80,21 @@ class MainWindow(tk.Tk):
         # This will be replaced by the actual merged image later.
         empty_image_data = np.zeros((480, 640, 3), dtype=np.uint8)
         self.merged_image = Image.fromarray(empty_image_data, 'RGB')
+
+    def _apply_initial_window_size(self):
+        """Size the window from the rendered widget requirements with a safety margin."""
+        self.update_idletasks()
+
+        req_width = self.winfo_reqwidth()
+        req_height = self.winfo_reqheight()
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+
+        width = min(max(req_width + 80, 1100), screen_width - 80)
+        height = min(max(req_height + 80, 780), screen_height - 80)
+
+        self.geometry(f"{width}x{height}")
+        self.minsize(min(width, 1100), min(height, 780))
 
     def init_ui(self):
         """Initialize all UI components."""
@@ -180,31 +195,46 @@ class MainWindow(tk.Tk):
         self.lbl_analyzed.pack(fill=tk.BOTH, expand=True)
 
         # Result display
-        paned_window = ttk.PanedWindow(self.frame_result, orient=tk.HORIZONTAL)
-        paned_window.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        result_frame_left = ttk.Frame(paned_window, style='TFrame')
-        result_frame_right = ttk.Frame(paned_window, style='TFrame')
-        paned_window.add(result_frame_left, weight=3)
-        paned_window.add(result_frame_right, weight=2)
+        result_container = ttk.Frame(self.frame_result, style='TFrame')
+        result_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        result_container.grid_columnconfigure(0, weight=3)
+        result_container.grid_columnconfigure(1, weight=2)
+        result_container.grid_rowconfigure(0, weight=1)
+
+        result_frame_left = ttk.Frame(result_container, style='TFrame')
+        result_frame_left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        result_frame_right = ttk.Frame(result_container, style='TFrame')
+        result_frame_right.grid(row=0, column=1, sticky="nsew")
+        result_frame_right.grid_rowconfigure(0, weight=1)
+        result_frame_right.grid_columnconfigure(0, weight=1)
 
         self.txt_log = ScrolledText(result_frame_right, height=6, font=('Consolas', 9))
-        self.txt_log.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+        self.txt_log.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
 
-        # Replacing Treeview with styled labels for clearer UX
-        self.lbl_rad_val = ttk.Label(result_frame_left, text="--", style='Header.TLabel')
-        self.lbl_rad_val.grid(row=0, column=0, padx=20, pady=(15, 0), sticky='w')
-        ttk.Label(result_frame_left, text="Min. Radius", style='SubHeader.TLabel').grid(row=1, column=0, padx=20, pady=(0, 10), sticky='w')
+        # Stack result values vertically so text remains readable across DPI/font settings.
+        result_frame_left.grid_columnconfigure(0, weight=1)
 
-        self.lbl_laser_val = ttk.Label(result_frame_left, text="--", style='Value.TLabel')
-        self.lbl_laser_val.grid(row=0, column=1, padx=20, pady=(22, 0), sticky='w')
-        ttk.Label(result_frame_left, text="vs Laser Offset", style='SubHeader.TLabel').grid(row=1, column=1, padx=20, pady=(0, 10), sticky='w')
+        self.lbl_rad_val = ttk.Label(result_frame_left, text="--", style='Header.TLabel', anchor='w')
+        self.lbl_rad_val.grid(row=0, column=0, padx=20, pady=(15, 0), sticky='ew')
+        ttk.Label(result_frame_left, text="Min. Radius", style='SubHeader.TLabel', anchor='w').grid(
+            row=1, column=0, padx=20, pady=(0, 10), sticky='ew'
+        )
 
-        self.lbl_dr_val = ttk.Label(result_frame_left, text="--", style='Value.TLabel')
-        self.lbl_dr_val.grid(row=0, column=2, padx=20, pady=(22, 0), sticky='w')
-        ttk.Label(result_frame_left, text="vs DR Offset", style='SubHeader.TLabel').grid(row=1, column=2, padx=20, pady=(0, 10), sticky='w')
+        self.lbl_laser_val = ttk.Label(
+            result_frame_left, text="--", style='Value.TLabel', anchor='w', justify='left'
+        )
+        self.lbl_laser_val.grid(row=2, column=0, padx=20, pady=(8, 0), sticky='ew')
+        ttk.Label(result_frame_left, text="vs Laser Offset", style='SubHeader.TLabel', anchor='w').grid(
+            row=3, column=0, padx=20, pady=(0, 10), sticky='ew'
+        )
 
-        result_frame_left.grid_columnconfigure((0, 1, 2), weight=1)
+        self.lbl_dr_val = ttk.Label(
+            result_frame_left, text="--", style='Value.TLabel', anchor='w', justify='left'
+        )
+        self.lbl_dr_val.grid(row=4, column=0, padx=20, pady=(8, 0), sticky='ew')
+        ttk.Label(result_frame_left, text="vs DR Offset", style='SubHeader.TLabel', anchor='w').grid(
+            row=5, column=0, padx=20, pady=(0, 10), sticky='ew'
+        )
 
     def update_results(self, min_radius, vs_laser, vs_dr):
         """Update the result labels with analysis data."""
@@ -217,13 +247,26 @@ class MainWindow(tk.Tk):
         if pil_img is None:
             return
 
+        label.original_image = pil_img.copy()
+
+        if frame not in self._image_bindings:
+            frame.bind("<Configure>", lambda _event, lbl=label, frm=frame: self._refresh_image_label(lbl, frm))
+            self._image_bindings[frame] = label
+
+        self._refresh_image_label(label, frame)
+
+    def _refresh_image_label(self, label: Label, frame: ttk.LabelFrame):
+        """Resize and redraw the cached image for the current frame size."""
+        if not hasattr(label, "original_image"):
+            return
+
         # Use a default size if the frame hasn't been rendered yet
         width = frame.winfo_width()
         height = frame.winfo_height()
         if width <= 1 or height <= 1:
             width, height = 300, 300
 
-        resized_img = pil_img.copy()
+        resized_img = label.original_image.copy()
         resized_img.thumbnail((width, height), Image.LANCZOS)
 
         img_tk = ImageTk.PhotoImage(image=resized_img)
