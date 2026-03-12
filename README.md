@@ -69,6 +69,25 @@ python3 -m pytest tests/domain/ --cov=src/domain --cov-report=html
 python3 -m pytest tests/domain/test_isocenter_detection.py -v
 ```
 
+### Building With PyInstaller
+
+Build from a dedicated virtual environment, not from a global Python install
+that already contains unrelated packages. PyInstaller analyzes the current
+environment, and extra installed libraries can add very large dependency trees.
+
+```bash
+python3 -m venv .venv-build
+source .venv-build/bin/activate
+python3 -m pip install --upgrade pip
+python3 -m pip install numpy opencv-python Pillow pylinac pyinstaller
+pyinstaller --noconfirm --clean StarshotAnalyzer.spec
+```
+
+Do not use `pyinstaller ... app.py` for release builds in this project. Use the
+provided spec so excluded packages such as `torch`, `tensorflow`,
+`transformers`, and `spacy` are not scanned if they exist in your machine-wide
+Python environment.
+
 ### Configuration
 
 Edit `config.ini` to configure:
